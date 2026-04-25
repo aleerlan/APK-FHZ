@@ -1,0 +1,35 @@
+{
+  "expo": {
+    "name": "honest-violet-coffee",
+    "slug": "snack-76208613-e3bd-4879-8c77-e554729675e8",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "splash": {
+      "image": "./assets/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/adaptive-icon.png",
+        "backgroundColor": "#ffffff"
+      },
+      "edgeToEdgeEnabled": true,
+      "package": "com.chinoerlan89.snack76208613e3bd48798c77e554729675e8"
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "4b0290b6-789b-4508-918d-d35e3e7fbd75"
+      }
+    }
+  }
+}
