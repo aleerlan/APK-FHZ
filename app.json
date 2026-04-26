@@ -2,7 +2,7 @@
   "expo": {
     "name": "FHZ Credits",
     "slug": "fhz-credits",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -23,6 +23,11 @@
     },
     "web": {
       "favicon": "./assets/favicon.png"
+    },
+    "extra": {
+      "eas": {
+        "projectId": "4b0290b6-789b-4508-918d-d35e3e7fbd75"
+      }
     }
   }
 }
