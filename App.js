@@ -13,6 +13,7 @@ export default function App() {
   const [pantalla, setPantalla] = useState('clientes');
   const [clientes, setClientes] = useState([]);
   const [clienteActual, setClienteActual] = useState(null);
+  const [clienteCobranzaActual, setClienteCobranzaActual] = useState(null);
   const [creditoActual, setCreditoActual] = useState(null);
   const [comprobanteActual, setComprobanteActual] = useState(null);
 
@@ -23,7 +24,9 @@ export default function App() {
   const [credito, setCredito] = useState({
     contrato: '',
     total: '',
-    valor: ''
+    valor: '',
+    interesSemanal: '',
+    fechaInicio: ''
   });
 
   const [pago, setPago] = useState({
@@ -31,6 +34,20 @@ export default function App() {
     cuota: '',
     concepto: 'Pago crédito semanal'
   });
+
+  const [pagoGeneradoSemanal, setPagoGeneradoSemanal] = useState({
+    monto: '',
+    semanaId: '',
+    semanaLabel: ''
+  });
+
+  const [mostrarSelectorSemanas, setMostrarSelectorSemanas] = useState(false);
+
+  const fechaActualRecaudacion = new Date();
+  const [mesRecaudacion, setMesRecaudacion] = useState(
+    `${fechaActualRecaudacion.getFullYear()}-${String(fechaActualRecaudacion.getMonth() + 1).padStart(2, '0')}`
+  );
+  const [mostrarSelectorMeses, setMostrarSelectorMeses] = useState(false);
 
   useEffect(() => {
     cargarDatos();
@@ -51,14 +68,476 @@ export default function App() {
         ...c,
         creditos: Array.isArray(c.creditos) ? c.creditos.map(cr => ({
           ...cr,
-          pagos: Array.isArray(cr.pagos) ? cr.pagos : []
+          interesSemanal: cr.interesSemanal || '',
+          fechaInicio: cr.fechaInicio || '',
+          pagos: Array.isArray(cr.pagos) ? cr.pagos : [],
+          cobranzasSemanal: Array.isArray(cr.cobranzasSemanal) ? cr.cobranzasSemanal : []
         })) : []
       }));
       setClientes(normalizados);
+
+      const mayorRecibo = obtenerMayorNumeroRecibo(normalizados);
+      const contadorGuardado = parseInt(recibo, 10) || 112;
+      setContadorRecibo(Math.max(contadorGuardado, mayorRecibo + 1));
+    } else if (recibo) {
+      setContadorRecibo(parseInt(recibo, 10) || 112);
+    }
+  };
+
+  const numero = (v) => {
+    const limpio = String(v || '').replace(/\./g, '').replace(',', '.');
+    return parseFloat(limpio) || 0;
+  };
+
+  const dinero = (v) => {
+    const n = numero(v);
+    return '$ ' + Math.round(n || 0).toLocaleString('es-AR');
+  };
+
+  const calcularPagoSemanal = (cr) => {
+    const valor = numero(cr?.valor);
+    const cuotas = parseInt(cr?.total) || 1;
+    const interes = numero(cr?.interesSemanal);
+
+    const interesTotal = valor * (interes / 100) * cuotas;
+    const totalADevolver = valor + interesTotal;
+
+    return Math.round(totalADevolver / cuotas);
+  };
+
+  const obtenerUltimoContratoCliente = (cliente) => {
+    const creditos = cliente?.creditos || [];
+    if (creditos.length === 0) return '';
+    return creditos[creditos.length - 1]?.contrato || '';
+  };
+
+  const prepararNuevoCredito = () => {
+    const contratoDetectado = obtenerUltimoContratoCliente(clienteActual);
+
+    setCredito({
+      contrato: contratoDetectado,
+      total: '',
+      valor: '',
+      interesSemanal: '',
+      fechaInicio: ''
+    });
+
+    setPantalla('credito');
+  };
+
+  const obtenerMayorNumeroRecibo = (listaClientes) => {
+    let mayor = 111;
+
+    (listaClientes || []).forEach(cliente => {
+      (cliente.creditos || []).forEach(cr => {
+        (cr.pagos || []).forEach(p => {
+          const recibo = String(p.recibo || '');
+          const partes = recibo.split('-');
+          const numeroRecibo = parseInt(partes[1], 10);
+
+          if (!isNaN(numeroRecibo) && numeroRecibo > mayor) {
+            mayor = numeroRecibo;
+          }
+        });
+      });
+    });
+
+    return mayor;
+  };
+
+  const obtenerProximoNumeroRecibo = () => {
+    const mayorExistente = obtenerMayorNumeroRecibo(clientes);
+    const proximo = Math.max(contadorRecibo, mayorExistente + 1);
+    return proximo;
+  };
+
+  const calcularSaldoAcumulado = (cr) => {
+    const pagoEsperado = calcularPagoSemanal(cr);
+    let saldo = 0;
+
+    (cr?.pagos || []).forEach(p => {
+      const esperado = numero(p.esperado || pagoEsperado);
+      const abonado = numero(p.monto);
+      saldo = Math.max(0, saldo + esperado - abonado);
+    });
+
+    return saldo;
+  };
+
+  const calcularSaldoParaPago = (cr, montoAbonado) => {
+    const pagoEsperado = calcularPagoSemanal(cr);
+    const saldoAnterior = calcularSaldoAcumulado(cr);
+    const abonado = numero(montoAbonado);
+    const diferenciaSemana = Math.max(0, pagoEsperado - abonado);
+    const saldoAcumulado = Math.max(0, saldoAnterior + pagoEsperado - abonado);
+
+    return {
+      pagoEsperado,
+      saldoAnterior,
+      diferenciaSemana,
+      saldoAcumulado
+    };
+  };
+
+  const estaSemana = (fechaISO) => {
+    if (!fechaISO) return false;
+
+    const fecha = new Date(fechaISO);
+    const hoy = new Date();
+    const dia = hoy.getDay();
+    const diferenciaAlLunes = dia === 0 ? -6 : 1 - dia;
+
+    const inicioSemana = new Date(hoy);
+    inicioSemana.setDate(hoy.getDate() + diferenciaAlLunes);
+    inicioSemana.setHours(0, 0, 0, 0);
+
+    const finSemana = new Date(inicioSemana);
+    finSemana.setDate(inicioSemana.getDate() + 7);
+
+    return fecha >= inicioSemana && fecha < finSemana;
+  };
+
+  const creditoEstaActivo = (cr) => {
+    const pagadas = (cr?.pagos || []).length;
+    const totalCuotas = parseInt(cr?.total) || 0;
+    return totalCuotas === 0 || pagadas < totalCuotas;
+  };
+
+  const calcularCobranzaClienteSemanal = (cliente) => {
+    let esperado = 0;
+    let generado = 0;
+
+    (cliente?.creditos || []).forEach(cr => {
+      if (!creditoEstaActivo(cr)) return;
+
+      esperado += calcularPagoSemanal(cr);
+
+      (cr.cobranzasSemanal || []).forEach(cobranza => {
+        if (estaSemana(cobranza.fechaISO)) {
+          generado += numero(cobranza.monto);
+        }
+      });
+    });
+
+    const morosidad = esperado > 0
+      ? Math.max(0, ((esperado - generado) / esperado) * 100)
+      : 0;
+
+    const cobranza = esperado > 0
+      ? Math.min(100, (generado / esperado) * 100)
+      : 0;
+
+    return { esperado, generado, morosidad, cobranza };
+  };
+
+  const calcularCobranzaGeneralSemanal = () => {
+    let esperado = 0;
+    let generado = 0;
+
+    clientes.forEach(cliente => {
+      const resumen = calcularCobranzaClienteSemanal(cliente);
+      esperado += resumen.esperado;
+      generado += resumen.generado;
+    });
+
+    const morosidad = esperado > 0
+      ? Math.max(0, ((esperado - generado) / esperado) * 100)
+      : 0;
+
+    const cobranza = esperado > 0
+      ? Math.min(100, (generado / esperado) * 100)
+      : 0;
+
+    return { esperado, generado, morosidad, cobranza };
+  };
+
+
+  const obtenerSemanasCliente = (cliente) => {
+    const semanas = {};
+
+    (cliente?.creditos || []).forEach(cr => {
+      (cr.cobranzasSemanal || []).forEach(registro => {
+        if (!registro.semanaId) return;
+
+        semanas[registro.semanaId] = {
+          id: registro.semanaId,
+          label: registro.semanaLabel || registro.semanaId,
+          inicioISO: registro.semanaInicioISO || '',
+          finISO: registro.semanaFinISO || ''
+        };
+      });
+    });
+
+    return Object.values(semanas).sort((a, b) => a.id.localeCompare(b.id));
+  };
+
+  const calcularCobranzasPorSemanaCliente = (cliente) => {
+    const semanas = obtenerSemanasCliente(cliente);
+
+    return semanas.map(semana => {
+      let esperado = 0;
+      let generado = 0;
+
+      (cliente?.creditos || []).forEach(cr => {
+        if (!creditoEstaActivo(cr)) return;
+
+        esperado += calcularPagoSemanal(cr);
+
+        (cr.cobranzasSemanal || []).forEach(registro => {
+          if (registro.semanaId === semana.id) {
+            generado += numero(registro.monto);
+          }
+        });
+      });
+
+      const cobranza = esperado > 0
+        ? Math.min(100, (generado / esperado) * 100)
+        : 0;
+
+      const morosidad = esperado > 0
+        ? Math.max(0, ((esperado - generado) / esperado) * 100)
+        : 0;
+
+      return {
+        ...semana,
+        esperado,
+        generado,
+        cobranza,
+        morosidad
+      };
+    });
+  };
+
+  const calcularCobranzaHistoricaCliente = (cliente) => {
+    const semanas = calcularCobranzasPorSemanaCliente(cliente);
+
+    let esperado = 0;
+    let generado = 0;
+
+    semanas.forEach(semana => {
+      esperado += semana.esperado;
+      generado += semana.generado;
+    });
+
+    const cobranza = esperado > 0
+      ? Math.min(100, (generado / esperado) * 100)
+      : 0;
+
+    const morosidad = esperado > 0
+      ? Math.max(0, ((esperado - generado) / esperado) * 100)
+      : 0;
+
+    return { esperado, generado, cobranza, morosidad, semanasAnalizadas: semanas.length };
+  };
+
+  const calcularCobranzaHistoricaGeneral = () => {
+    let esperado = 0;
+    let generado = 0;
+
+    clientes.forEach(cliente => {
+      const resumen = calcularCobranzaHistoricaCliente(cliente);
+      esperado += resumen.esperado;
+      generado += resumen.generado;
+    });
+
+    const cobranza = esperado > 0
+      ? Math.min(100, (generado / esperado) * 100)
+      : 0;
+
+    const morosidad = esperado > 0
+      ? Math.max(0, ((esperado - generado) / esperado) * 100)
+      : 0;
+
+    return { esperado, generado, cobranza, morosidad };
+  };
+
+  const abrirCobranzasCliente = (cliente) => {
+    setClienteCobranzaActual(cliente);
+    setPantalla('cobranzasCliente');
+  };
+
+
+  const obtenerMesesRecaudacion = () => {
+    const anioActual = new Date().getFullYear();
+    const opciones = [];
+
+    for (let anio = anioActual - 1; anio <= anioActual + 1; anio++) {
+      for (let mes = 1; mes <= 12; mes++) {
+        opciones.push({
+          id: `${anio}-${String(mes).padStart(2, '0')}`,
+          label: `${meses[mes - 1]} ${anio}`,
+          anio,
+          mes
+        });
+      }
     }
 
-    if (recibo) setContadorRecibo(parseInt(recibo) || 112);
+    return opciones;
   };
+
+  const obtenerLabelMesRecaudacion = () => {
+    const encontrado = obtenerMesesRecaudacion().find(m => m.id === mesRecaudacion);
+    return encontrado ? encontrado.label : mesRecaudacion;
+  };
+
+  const obtenerSemanasPorMesId = (mesId) => {
+    const [anioTexto, mesTexto] = String(mesId).split('-');
+    const anio = parseInt(anioTexto, 10);
+    const mes = parseInt(mesTexto, 10);
+    const ultimoDia = new Date(anio, mes, 0).getDate();
+    const semanas = [];
+
+    for (let inicioDia = 1; inicioDia <= ultimoDia; inicioDia += 7) {
+      const semanaMes = Math.ceil(inicioDia / 7);
+      const finDia = Math.min(inicioDia + 6, ultimoDia);
+      const inicio = new Date(anio, mes - 1, inicioDia);
+      const fin = new Date(anio, mes - 1, finDia);
+
+      semanas.push({
+        id: `${anio}-${String(mes).padStart(2, '0')}-${semanaMes}`,
+        label: `Semana ${semanaMes} - ${meses[mes - 1]} ${anio} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
+        inicioISO: inicio.toISOString(),
+        finISO: fin.toISOString()
+      });
+    }
+
+    return semanas;
+  };
+
+  const obtenerSemanaParaGrafico = (mesId) => {
+    const semanasMes = obtenerSemanasPorMesId(mesId);
+    const semanasConRegistro = new Set();
+
+    clientes.forEach(cliente => {
+      (cliente.creditos || []).forEach(cr => {
+        (cr.cobranzasSemanal || []).forEach(registro => {
+          if (String(registro.semanaId || '').startsWith(mesId)) {
+            semanasConRegistro.add(registro.semanaId);
+          }
+        });
+      });
+    });
+
+    const conRegistro = semanasMes.filter(s => semanasConRegistro.has(s.id));
+    if (conRegistro.length > 0) return conRegistro[conRegistro.length - 1];
+
+    const hoy = new Date();
+    const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+    if (mesActual === mesId) {
+      const semanaActual = Math.ceil(hoy.getDate() / 7);
+      return semanasMes.find(s => s.id.endsWith(`-${semanaActual}`)) || semanasMes[0];
+    }
+
+    return semanasMes[0];
+  };
+
+  const calcularEsperadoSemanalGeneral = () => {
+    let esperado = 0;
+
+    clientes.forEach(cliente => {
+      (cliente.creditos || []).forEach(cr => {
+        if (creditoEstaActivo(cr)) {
+          esperado += calcularPagoSemanal(cr);
+        }
+      });
+    });
+
+    return esperado;
+  };
+
+  const calcularRecaudacionSemanaGeneral = (mesId) => {
+    const semana = obtenerSemanaParaGrafico(mesId);
+    const esperado = calcularEsperadoSemanalGeneral();
+    let recaudado = 0;
+
+    clientes.forEach(cliente => {
+      (cliente.creditos || []).forEach(cr => {
+        (cr.cobranzasSemanal || []).forEach(registro => {
+          if (registro.semanaId === semana?.id) {
+            recaudado += numero(registro.monto);
+          }
+        });
+      });
+    });
+
+    const saldo = Math.max(0, esperado - recaudado);
+    const porcentajeRecaudado = esperado > 0 ? Math.min(100, (recaudado / esperado) * 100) : 0;
+    const porcentajeSaldo = esperado > 0 ? Math.max(0, (saldo / esperado) * 100) : 0;
+
+    return {
+      label: semana?.label || 'Semana no disponible',
+      esperado,
+      recaudado,
+      saldo,
+      porcentajeRecaudado,
+      porcentajeSaldo
+    };
+  };
+
+  const calcularRecaudacionMensualGeneral = (mesId) => {
+    const semanasMes = obtenerSemanasPorMesId(mesId);
+    const esperadoMensual = calcularEsperadoSemanalGeneral() * semanasMes.length;
+    let recaudado = 0;
+
+    clientes.forEach(cliente => {
+      (cliente.creditos || []).forEach(cr => {
+        (cr.cobranzasSemanal || []).forEach(registro => {
+          if (String(registro.semanaId || '').startsWith(mesId)) {
+            recaudado += numero(registro.monto);
+          }
+        });
+      });
+    });
+
+    const saldo = Math.max(0, esperadoMensual - recaudado);
+    const porcentajeRecaudado = esperadoMensual > 0 ? Math.min(100, (recaudado / esperadoMensual) * 100) : 0;
+    const porcentajeSaldo = esperadoMensual > 0 ? Math.max(0, (saldo / esperadoMensual) * 100) : 0;
+
+    return {
+      label: obtenerLabelMesRecaudacion(),
+      esperado: esperadoMensual,
+      recaudado,
+      saldo,
+      porcentajeRecaudado,
+      porcentajeSaldo
+    };
+  };
+
+  const GraficoTortaRecaudacion = ({
+    titulo,
+    labelRecaudado,
+    labelSaldo,
+    recaudado,
+    saldo,
+    porcentajeRecaudado,
+    porcentajeSaldo
+  }) => (
+    <View style={styles.item}>
+      <Text style={styles.itemTitle}>{titulo}</Text>
+
+      <View style={styles.pieRow}>
+        <View style={styles.pieCircle}>
+          <Text style={styles.piePercent}>{porcentajeRecaudado.toFixed(1)}%</Text>
+          <Text style={styles.pieText}>cobranza</Text>
+        </View>
+
+        <View style={styles.pieLegend}>
+          <View style={styles.legendRow}>
+            <View style={styles.legendColorRecaudado} />
+            <Text>{labelRecaudado}: {dinero(recaudado)}</Text>
+          </View>
+
+          <View style={styles.legendRow}>
+            <View style={styles.legendColorSaldo} />
+            <Text>{labelSaldo}: {dinero(saldo)}</Text>
+          </View>
+
+          <Text>Porcentaje recaudado: {porcentajeRecaudado.toFixed(1)}%</Text>
+          <Text>Porcentaje saldo: {porcentajeSaldo.toFixed(1)}%</Text>
+        </View>
+      </View>
+    </View>
+  );
 
   const actualizarActuales = (lista, clienteId, creditoId = null) => {
     const clienteNuevo = lista.find(c => c.id === clienteId);
@@ -173,8 +652,8 @@ export default function App() {
   };
 
   const guardarCredito = () => {
-    if (!credito.contrato || !credito.total || !credito.valor) {
-      Alert.alert('Faltan datos', 'Completá contrato, cuotas y valor del crédito.');
+    if (!credito.contrato || !credito.total || !credito.valor || !credito.interesSemanal || !credito.fechaInicio) {
+      Alert.alert('Faltan datos', 'Completá contrato, cuotas, valor del crédito, interés semanal y fecha de inicio.');
       return;
     }
 
@@ -183,7 +662,10 @@ export default function App() {
       contrato: credito.contrato,
       total: credito.total,
       valor: credito.valor,
-      pagos: []
+      interesSemanal: credito.interesSemanal,
+      fechaInicio: credito.fechaInicio,
+      pagos: [],
+      cobranzasSemanal: []
     };
 
     const lista = clientes.map(c => {
@@ -198,10 +680,10 @@ export default function App() {
 
     setClientes(lista);
     actualizarActuales(lista, clienteActual.id, nuevoCredito.id);
-    setCredito({ contrato: '', total: '', valor: '' });
+    setCredito({ contrato: '', total: '', valor: '', interesSemanal: '', fechaInicio: '' });
 
     setPago({
-      monto: '',
+      monto: String(calcularPagoSemanal(nuevoCredito)),
       cuota: '1',
       concepto: 'Pago crédito semanal'
     });
@@ -225,12 +707,155 @@ export default function App() {
     }
 
     setPago({
-      monto: '',
+      monto: String(calcularPagoSemanal(creditoActual)),
       cuota: String(pagos.length + 1),
       concepto: 'Pago crédito semanal'
     });
 
     setPantalla('pago');
+  };
+
+
+  const meses = [
+    'Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
+    'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'
+  ];
+
+  const formatearFechaCorta = (fecha) => {
+    const dia = String(fecha.getDate()).padStart(2, '0');
+    const mes = String(fecha.getMonth() + 1).padStart(2, '0');
+    const anio = fecha.getFullYear();
+    return `${dia}/${mes}/${anio}`;
+  };
+
+  const obtenerSemanasDelAnio = () => {
+    const anio = new Date().getFullYear();
+    const semanas = [];
+
+    for (let mes = 0; mes < 12; mes++) {
+      const ultimoDia = new Date(anio, mes + 1, 0).getDate();
+      let semanaMes = 1;
+
+      for (let inicioDia = 1; inicioDia <= ultimoDia; inicioDia += 7) {
+        const finDia = Math.min(inicioDia + 6, ultimoDia);
+        const inicio = new Date(anio, mes, inicioDia);
+        const fin = new Date(anio, mes, finDia);
+
+        semanas.push({
+          id: `${anio}-${String(mes + 1).padStart(2, '0')}-${semanaMes}`,
+          label: `Semana ${semanaMes} - ${meses[mes]} ${anio} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
+          anio,
+          mes: mes + 1,
+          semanaMes,
+          inicioISO: inicio.toISOString(),
+          finISO: fin.toISOString()
+        });
+
+        semanaMes += 1;
+      }
+    }
+
+    return semanas;
+  };
+
+  const obtenerSemanaActual = () => {
+    const hoy = new Date();
+    const dia = hoy.getDate();
+    const semanaMes = Math.ceil(dia / 7);
+    const inicioDia = ((semanaMes - 1) * 7) + 1;
+    const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
+    const finDia = Math.min(inicioDia + 6, ultimoDia);
+    const inicio = new Date(hoy.getFullYear(), hoy.getMonth(), inicioDia);
+    const fin = new Date(hoy.getFullYear(), hoy.getMonth(), finDia);
+
+    return {
+      id: `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${semanaMes}`,
+      label: `Semana ${semanaMes} - ${meses[hoy.getMonth()]} ${hoy.getFullYear()} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
+      anio: hoy.getFullYear(),
+      mes: hoy.getMonth() + 1,
+      semanaMes,
+      inicioISO: inicio.toISOString(),
+      finISO: fin.toISOString()
+    };
+  };
+
+  const seleccionarSemanaPagoGenerado = (semana) => {
+    setPagoGeneradoSemanal({
+      ...pagoGeneradoSemanal,
+      semanaId: semana.id,
+      semanaLabel: semana.label,
+      semanaInicioISO: semana.inicioISO,
+      semanaFinISO: semana.finISO
+    });
+    setMostrarSelectorSemanas(false);
+  };
+
+  const irAPagoGeneradoSemanal = () => {
+    if (!creditoActual || !creditoEstaActivo(creditoActual)) {
+      Alert.alert('Crédito cancelado', 'Este crédito ya fue cancelado.');
+      return;
+    }
+
+    const semanaActual = obtenerSemanaActual();
+
+    setPagoGeneradoSemanal({
+      monto: '',
+      semanaId: semanaActual.id,
+      semanaLabel: semanaActual.label,
+      semanaInicioISO: semanaActual.inicioISO,
+      semanaFinISO: semanaActual.finISO
+    });
+
+    setMostrarSelectorSemanas(false);
+    setPantalla('pagoGeneradoSemanal');
+  };
+
+  const guardarPagoGeneradoSemanal = () => {
+    if (!pagoGeneradoSemanal.semanaId) {
+      Alert.alert('Falta dato', 'Seleccioná la semana correspondiente.');
+      return;
+    }
+
+    if (!pagoGeneradoSemanal.monto) {
+      Alert.alert('Falta dato', 'Completá el pago generado semanal.');
+      return;
+    }
+
+    const nuevoRegistro = {
+      id: Date.now().toString(),
+      monto: pagoGeneradoSemanal.monto,
+      esperado: String(calcularPagoSemanal(creditoActual)),
+      semanaId: pagoGeneradoSemanal.semanaId,
+      semanaLabel: pagoGeneradoSemanal.semanaLabel,
+      semanaInicioISO: pagoGeneradoSemanal.semanaInicioISO,
+      semanaFinISO: pagoGeneradoSemanal.semanaFinISO,
+      fecha: new Date().toLocaleString(),
+      fechaISO: new Date().toISOString()
+    };
+
+    const lista = clientes.map(c => {
+      if (c.id === clienteActual.id) {
+        return {
+          ...c,
+          creditos: (c.creditos || []).map(cr => {
+            if (cr.id === creditoActual.id) {
+              return {
+                ...cr,
+                cobranzasSemanal: [...(cr.cobranzasSemanal || []), nuevoRegistro]
+              };
+            }
+            return cr;
+          })
+        };
+      }
+      return c;
+    });
+
+    setClientes(lista);
+    actualizarActuales(lista, clienteActual.id, creditoActual.id);
+    setPagoGeneradoSemanal({ monto: '', semanaId: '', semanaLabel: '' });
+    setMostrarSelectorSemanas(false);
+    setPantalla('detalleCredito');
   };
 
   const generarComprobante = () => {
@@ -239,14 +864,21 @@ export default function App() {
       return;
     }
 
-    const nro = `001-${String(contadorRecibo).padStart(6, '0')}`;
+    const proximoRecibo = obtenerProximoNumeroRecibo();
+    const nro = `001-${String(proximoRecibo).padStart(6, '0')}`;
     setNumeroReciboActual(nro);
-    setContadorRecibo(contadorRecibo + 1);
+    setContadorRecibo(proximoRecibo + 1);
+
+    const saldoPago = calcularSaldoParaPago(creditoActual, pago.monto);
 
     const pagoNuevo = {
       ...pago,
       recibo: nro,
-      fecha: new Date().toLocaleString()
+      fecha: new Date().toLocaleString(),
+      esperado: String(saldoPago.pagoEsperado),
+      saldoAnterior: String(saldoPago.saldoAnterior),
+      saldoSemana: String(saldoPago.diferenciaSemana),
+      saldoAcumulado: String(saldoPago.saldoAcumulado)
     };
 
     const lista = clientes.map(c => {
@@ -295,14 +927,19 @@ export default function App() {
   const total = parseInt(creditoActual?.total) || 0;
   const abonadas = parseInt(pago.cuota) || 0;
   const restantes = total - abonadas;
-  const creditoCancelado = restantes <= 0;
+  const saldoComprobanteActual = numero(comprobanteActual?.saldoAcumulado || 0);
+  const creditoCancelado = restantes <= 0 && saldoComprobanteActual <= 0;
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
 
       {pantalla === 'clientes' && (
         <>
           <Text style={styles.title}>FHZ CRÉDITOS</Text>
+
+          <TouchableOpacity style={styles.button} onPress={() => setPantalla('cobranzas')}>
+            <Text style={styles.btnText}>Cobranzas</Text>
+          </TouchableOpacity>
 
           {clientes.map((c) => (
             <TouchableOpacity
@@ -350,6 +987,8 @@ export default function App() {
               >
                 <Text style={styles.itemTitle}>{cr.contrato}</Text>
                 <Text>Valor crédito: ${cr.valor}</Text>
+                <Text>Interés semanal: {cr.interesSemanal}%</Text>
+                <Text>Pago semanal: ${calcularPagoSemanal(cr).toLocaleString('es-AR')}</Text>
                 <Text>{pagadas} de {cr.total}</Text>
                 <Text>{cancelado ? 'CRÉDITO CANCELADO' : `Cuotas restantes: ${quedan}`}</Text>
                 <Text style={styles.hint}>Mantener presionado para eliminar</Text>
@@ -357,7 +996,7 @@ export default function App() {
             );
           })}
 
-          <TouchableOpacity style={styles.button} onPress={() => setPantalla('credito')}>
+          <TouchableOpacity style={styles.button} onPress={prepararNuevoCredito}>
             <Text style={styles.btnText}>Nuevo crédito</Text>
           </TouchableOpacity>
 
@@ -378,6 +1017,8 @@ export default function App() {
             <Text style={styles.itemTitle}>{creditoActual?.contrato}</Text>
             <Text>Cliente: {clienteActual?.nombre}</Text>
             <Text>Valor crédito: ${creditoActual?.valor}</Text>
+            <Text>Interés semanal: {creditoActual?.interesSemanal}%</Text>
+            <Text>Pago semanal: ${calcularPagoSemanal(creditoActual).toLocaleString('es-AR')}</Text>
             <Text>Cuotas: {(creditoActual?.pagos || []).length} de {creditoActual?.total}</Text>
             <Text>
               {(creditoActual?.pagos || []).length >= parseInt(creditoActual?.total || 0)
@@ -390,6 +1031,12 @@ export default function App() {
             <Text style={styles.btnText}>Nuevo pago</Text>
           </TouchableOpacity>
 
+          {creditoEstaActivo(creditoActual) && (
+            <TouchableOpacity style={styles.button} onPress={irAPagoGeneradoSemanal}>
+              <Text style={styles.btnText}>Pago generado semanal</Text>
+            </TouchableOpacity>
+          )}
+
           <Text style={styles.subTitle}>Comprobantes creados</Text>
 
           {(creditoActual?.pagos || []).map((p, i) => (
@@ -401,6 +1048,7 @@ export default function App() {
             >
               <Text style={styles.itemTitle}>Recibo {p.recibo}</Text>
               <Text>Monto: ${p.monto}</Text>
+              <Text>Saldo acumulado: {dinero(p.saldoAcumulado || 0)}</Text>
               <Text>Cuota: {p.cuota} de {creditoActual?.total}</Text>
               <Text>{p.fecha}</Text>
               <Text style={styles.hint}>Mantener presionado para eliminar</Text>
@@ -435,17 +1083,34 @@ export default function App() {
           <TextInput
             placeholder="Valor crédito"
             style={styles.input}
+            keyboardType="number-pad"
             value={credito.valor}
             onChangeText={(v) => setCredito({ ...credito, valor: v })}
           />
+
+          <TextInput
+            placeholder="Interés semanal (%)"
+            style={styles.input}
+            keyboardType="numeric"
+            value={credito.interesSemanal}
+            onChangeText={(v) => setCredito({ ...credito, interesSemanal: v })}
+          />
+
+          <TextInput
+            placeholder="Fecha inicio crédito (DD/MM/AAAA)"
+            style={styles.input}
+            value={credito.fechaInicio}
+            onChangeText={(v) => setCredito({ ...credito, fechaInicio: v })}
+          />
+
+          <View style={styles.item}>
+            <Text>Pago semanal calculado: ${calcularPagoSemanal(credito).toLocaleString('es-AR')}</Text>
+          </View>
 
           <TouchableOpacity style={styles.button} onPress={guardarCredito}>
             <Text style={styles.btnText}>Guardar crédito y crear pago</Text>
           </TouchableOpacity>
 
-          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCliente')}>
-            <Text>Volver</Text>
-          </TouchableOpacity>
         </>
       )}
 
@@ -457,12 +1122,17 @@ export default function App() {
             <Text>Cliente: {clienteActual?.nombre}</Text>
             <Text>Contrato: {creditoActual?.contrato}</Text>
             <Text>Valor crédito: ${creditoActual?.valor}</Text>
+            <Text>Interés semanal: {creditoActual?.interesSemanal}%</Text>
+            <Text>Fecha inicio crédito: {creditoActual?.fechaInicio || '-'}</Text>
+            <Text>Pago semanal calculado: ${calcularPagoSemanal(creditoActual).toLocaleString('es-AR')}</Text>
+            <Text>Saldo acumulado actual: {dinero(calcularSaldoAcumulado(creditoActual))}</Text>
             <Text>Cuota actual: {pago.cuota} de {creditoActual?.total}</Text>
           </View>
 
           <TextInput
             placeholder="Monto abonado"
             style={styles.input}
+            keyboardType="number-pad"
             value={pago.monto}
             onChangeText={(v) => setPago({ ...pago, monto: v })}
           />
@@ -500,6 +1170,230 @@ export default function App() {
         </>
       )}
 
+      {pantalla === 'pagoGeneradoSemanal' && (
+        <>
+          <Text style={styles.title}>Pago generado semanal</Text>
+
+          <View style={styles.item}>
+            <Text>Cliente: {clienteActual?.nombre}</Text>
+            <Text>Contrato: {creditoActual?.contrato}</Text>
+            <Text>Pago esperado:</Text>
+            <Text style={styles.bigNumber}>$ {calcularPagoSemanal(creditoActual).toLocaleString('es-AR')}</Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.input}
+            onPress={() => setMostrarSelectorSemanas(!mostrarSelectorSemanas)}
+          >
+            <Text style={styles.itemTitle}>Semana correspondiente</Text>
+            <Text>{pagoGeneradoSemanal.semanaLabel || 'Tocar para seleccionar semana'}</Text>
+          </TouchableOpacity>
+
+          {mostrarSelectorSemanas && (
+            <ScrollView
+              style={styles.selectorSemanas}
+              nestedScrollEnabled={true}
+            >
+              {obtenerSemanasDelAnio().map((semana) => (
+                <TouchableOpacity
+                  key={semana.id}
+                  style={[
+                    styles.semanaItem,
+                    pagoGeneradoSemanal.semanaId === semana.id && styles.semanaItemSeleccionada
+                  ]}
+                  onPress={() => seleccionarSemanaPagoGenerado(semana)}
+                >
+                  <Text>{semana.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
+          <TextInput
+            placeholder="Pago generado semanal"
+            style={styles.input}
+            keyboardType="numeric"
+            value={pagoGeneradoSemanal.monto}
+            onChangeText={(v) => setPagoGeneradoSemanal({ ...pagoGeneradoSemanal, monto: v })}
+          />
+
+          <TouchableOpacity style={styles.button} onPress={guardarPagoGeneradoSemanal}>
+            <Text style={styles.btnText}>Guardar pago generado semanal</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCredito')}>
+            <Text>Volver al crédito</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'cobranzas' && (
+        <>
+          <Text style={styles.title}>Cobranzas</Text>
+
+          <TouchableOpacity style={styles.button} onPress={() => setPantalla('recaudacion')}>
+            <Text style={styles.btnText}>Recaudación</Text>
+          </TouchableOpacity>
+
+          {(() => {
+            const general = calcularCobranzaHistoricaGeneral();
+            return (
+              <View style={styles.item}>
+                <Text style={styles.itemTitle}>Resumen general histórico</Text>
+                <Text>Pagos esperados: {dinero(general.esperado)}</Text>
+                <Text>Pagos generados: {dinero(general.generado)}</Text>
+                <Text>Porcentaje de cobranza: {general.cobranza.toFixed(1)}%</Text>
+                <Text>Morosidad general: {general.morosidad.toFixed(1)}%</Text>
+              </View>
+            );
+          })()}
+
+          <Text style={styles.subTitle}>Clientes</Text>
+
+          {clientes.map((c) => {
+            const resumen = calcularCobranzaHistoricaCliente(c);
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={styles.item}
+                onPress={() => abrirCobranzasCliente(c)}
+              >
+                <Text style={styles.itemTitle}>{c.nombre}</Text>
+                <Text>Semanas analizadas: {resumen.semanasAnalizadas}</Text>
+                <Text>Pago esperado histórico: {dinero(resumen.esperado)}</Text>
+                <Text>Pago generado histórico: {dinero(resumen.generado)}</Text>
+                <Text>Porcentaje de cobranza: {resumen.cobranza.toFixed(1)}%</Text>
+                <Text>Morosidad histórica: {resumen.morosidad.toFixed(1)}%</Text>
+                <Text style={styles.hint}>Tocar para ver detalle por semana</Text>
+              </TouchableOpacity>
+            );
+          })}
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('clientes')}>
+            <Text>Volver</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'cobranzasCliente' && (
+        <>
+          <Text style={styles.title}>Cobranzas</Text>
+          <Text style={styles.subTitle}>{clienteCobranzaActual?.nombre}</Text>
+
+          {(() => {
+            const semanas = calcularCobranzasPorSemanaCliente(clienteCobranzaActual);
+            const historico = calcularCobranzaHistoricaCliente(clienteCobranzaActual);
+
+            return (
+              <>
+                <View style={styles.item}>
+                  <Text style={styles.itemTitle}>Resumen histórico del cliente</Text>
+                  <Text>Pago esperado histórico: {dinero(historico.esperado)}</Text>
+                  <Text>Pago generado histórico: {dinero(historico.generado)}</Text>
+                  <Text>Porcentaje de cobranza: {historico.cobranza.toFixed(1)}%</Text>
+                  <Text>Morosidad del cliente: {historico.morosidad.toFixed(1)}%</Text>
+                </View>
+
+                {semanas.length === 0 && (
+                  <View style={styles.item}>
+                    <Text>No hay pagos generados semanales cargados todavía.</Text>
+                  </View>
+                )}
+
+                {semanas.map((semana) => (
+                  <View key={semana.id} style={styles.item}>
+                    <Text style={styles.itemTitle}>{semana.label}</Text>
+                    <Text>Pago esperado: {dinero(semana.esperado)}</Text>
+                    <Text>Pago generado: {dinero(semana.generado)}</Text>
+                    <Text>Porcentaje de cobranza: {semana.cobranza.toFixed(1)}%</Text>
+                    <Text>Morosidad del cliente: {semana.morosidad.toFixed(1)}%</Text>
+                  </View>
+                ))}
+              </>
+            );
+          })()}
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('cobranzas')}>
+            <Text>Volver a cobranzas</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'recaudacion' && (
+        <>
+          <Text style={styles.title}>Recaudación</Text>
+
+          <TouchableOpacity
+            style={styles.input}
+            onPress={() => setMostrarSelectorMeses(!mostrarSelectorMeses)}
+          >
+            <Text style={styles.itemTitle}>Mes analizado</Text>
+            <Text>{obtenerLabelMesRecaudacion()}</Text>
+          </TouchableOpacity>
+
+          {mostrarSelectorMeses && (
+            <ScrollView
+              style={styles.selectorSemanas}
+              nestedScrollEnabled={true}
+            >
+              {obtenerMesesRecaudacion().map((mes) => (
+                <TouchableOpacity
+                  key={mes.id}
+                  style={[
+                    styles.semanaItem,
+                    mesRecaudacion === mes.id && styles.semanaItemSeleccionada
+                  ]}
+                  onPress={() => {
+                    setMesRecaudacion(mes.id);
+                    setMostrarSelectorMeses(false);
+                  }}
+                >
+                  <Text>{mes.label}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+
+          {(() => {
+            const semanal = calcularRecaudacionSemanaGeneral(mesRecaudacion);
+            const mensual = calcularRecaudacionMensualGeneral(mesRecaudacion);
+
+            return (
+              <>
+                <View style={styles.item}>
+                  <Text style={styles.itemTitle}>Semana analizada</Text>
+                  <Text>{semanal.label}</Text>
+                </View>
+
+                <GraficoTortaRecaudacion
+                  titulo="Gráfico semanal"
+                  labelRecaudado="Recaudado semanal"
+                  labelSaldo="Saldo semanal"
+                  recaudado={semanal.recaudado}
+                  saldo={semanal.saldo}
+                  porcentajeRecaudado={semanal.porcentajeRecaudado}
+                  porcentajeSaldo={semanal.porcentajeSaldo}
+                />
+
+                <GraficoTortaRecaudacion
+                  titulo="Gráfico mensual"
+                  labelRecaudado="Recaudado mensual"
+                  labelSaldo="Saldo mensual"
+                  recaudado={mensual.recaudado}
+                  saldo={mensual.saldo}
+                  porcentajeRecaudado={mensual.porcentajeRecaudado}
+                  porcentajeSaldo={mensual.porcentajeSaldo}
+                />
+              </>
+            );
+          })()}
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('cobranzas')}>
+            <Text>Volver a cobranzas</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
       {pantalla === 'comprobante' && (
         <>
           <View ref={viewRef} collapsable={false} style={[styles.recibo, creditoCancelado && styles.reciboCancelado]}>
@@ -520,6 +1414,7 @@ export default function App() {
               <Text><Text style={styles.bold}>CLIENTE:</Text> {clienteActual?.nombre}</Text>
               <Text><Text style={styles.bold}>N° DE CONTRATO:</Text> {creditoActual?.contrato}</Text>
               <Text><Text style={styles.bold}>VALOR DEL CRÉDITO:</Text> ${creditoActual?.valor}</Text>
+              <Text><Text style={styles.bold}>FECHA INICIO CRÉDITO:</Text> {creditoActual?.fechaInicio || '-'}</Text>
               <Text><Text style={styles.bold}>CONCEPTO:</Text> {pago.concepto}</Text>
             </View>
 
@@ -532,7 +1427,7 @@ export default function App() {
               <View style={[styles.moneyBoxLight, creditoCancelado && styles.greenBox]}>
                 <Text style={styles.moneyLabel}>SALDO DE LA SEMANA</Text>
                 <Text style={styles.moneyBlue}>
-                  {creditoCancelado ? 'CANCELADO' : '$ 0,00'}
+                  {creditoCancelado ? 'CANCELADO' : dinero(comprobanteActual?.saldoAcumulado || 0)}
                 </Text>
               </View>
             </View>
@@ -575,7 +1470,8 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, backgroundColor: '#eef1f5' },
+  container: { padding: 20, paddingBottom: 140, backgroundColor: '#eef1f5' },
+  scrollContent: { paddingBottom: 180 },
   title: { fontSize: 26, fontWeight: 'bold', marginBottom: 15 },
   subTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 8 },
   input: { backgroundColor: '#fff', padding: 14, marginVertical: 7, borderRadius: 10, fontSize: 16 },
@@ -586,6 +1482,7 @@ const styles = StyleSheet.create({
   button: { backgroundColor: '#1e3a8a', padding: 15, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   buttonSec: { backgroundColor: '#ddd', padding: 13, borderRadius: 12, alignItems: 'center', marginTop: 10 },
   btnText: { color: '#fff', fontWeight: 'bold', fontSize: 16 },
+  bigNumber: { fontSize: 24, fontWeight: 'bold', color: '#003f9e', marginTop: 5 },
   recibo: { backgroundColor: '#fff', padding: 18, borderRadius: 18, borderWidth: 4, borderColor: '#001b44' },
   reciboCancelado: { borderColor: '#16a34a' },
   headerRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 18 },
@@ -608,5 +1505,70 @@ const styles = StyleSheet.create({
   cuotaNum: { fontSize: 30, fontWeight: 'bold', color: '#003f9e', marginTop: 5 },
   fechaBox: { borderWidth: 1, borderColor: '#ccd2dc', borderRadius: 12, padding: 14, marginBottom: 18 },
   gracias: { textAlign: 'center', color: '#003f9e', fontSize: 16, marginBottom: 10 },
+  pieRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    marginTop: 10,
+  },
+  pieCircle: {
+    width: 120,
+    height: 120,
+    borderRadius: 60,
+    backgroundColor: '#dbeafe',
+    borderWidth: 18,
+    borderColor: '#16a34a',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  piePercent: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#001b44',
+  },
+  pieText: {
+    fontSize: 11,
+    color: '#001b44',
+  },
+  pieLegend: {
+    flex: 1,
+    gap: 6,
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  legendColorRecaudado: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#16a34a',
+  },
+  legendColorSaldo: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#dc2626',
+  },
+  selectorSemanas: {
+    backgroundColor: '#fff',
+    borderRadius: 10,
+    padding: 8,
+    marginBottom: 10,
+    height: 260,
+    overflow: 'hidden',
+  },
+  semanaItem: {
+    backgroundColor: '#eef1f5',
+    padding: 10,
+    borderRadius: 8,
+    marginVertical: 4,
+  },
+  semanaItemSeleccionada: {
+    backgroundColor: '#dbeafe',
+    borderWidth: 1,
+    borderColor: '#1e3a8a',
+  },
   footerLogo: { textAlign: 'center', color: '#001b44', fontWeight: 'bold', fontSize: 20 },
 });
