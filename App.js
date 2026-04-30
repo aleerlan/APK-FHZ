@@ -956,6 +956,7 @@ export default function App() {
 
           <TextInput
             placeholder="Nombre del cliente"
+            placeholderTextColor="#666"
             style={styles.input}
             value={nuevoCliente}
             onChangeText={setNuevoCliente}
@@ -1067,6 +1068,7 @@ export default function App() {
 
           <TextInput
             placeholder="Contrato"
+            placeholderTextColor="#666"
             style={styles.input}
             value={credito.contrato}
             onChangeText={(v) => setCredito({ ...credito, contrato: v })}
@@ -1074,6 +1076,7 @@ export default function App() {
 
           <TextInput
             placeholder="Total cuotas"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="numeric"
             value={credito.total}
@@ -1082,6 +1085,7 @@ export default function App() {
 
           <TextInput
             placeholder="Valor crédito"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="number-pad"
             value={credito.valor}
@@ -1090,6 +1094,7 @@ export default function App() {
 
           <TextInput
             placeholder="Interés semanal (%)"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="numeric"
             value={credito.interesSemanal}
@@ -1098,6 +1103,7 @@ export default function App() {
 
           <TextInput
             placeholder="Fecha inicio crédito (DD/MM/AAAA)"
+            placeholderTextColor="#666"
             style={styles.input}
             value={credito.fechaInicio}
             onChangeText={(v) => setCredito({ ...credito, fechaInicio: v })}
@@ -1131,6 +1137,7 @@ export default function App() {
 
           <TextInput
             placeholder="Monto abonado"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="number-pad"
             value={pago.monto}
@@ -1139,6 +1146,7 @@ export default function App() {
 
           <TextInput
             placeholder="Número de cuota"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="numeric"
             value={pago.cuota}
@@ -1211,6 +1219,7 @@ export default function App() {
 
           <TextInput
             placeholder="Pago generado semanal"
+            placeholderTextColor="#666"
             style={styles.input}
             keyboardType="numeric"
             value={pagoGeneradoSemanal.monto}
