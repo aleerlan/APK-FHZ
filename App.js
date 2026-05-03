@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert
+  ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -931,7 +931,16 @@ export default function App() {
   const creditoCancelado = restantes <= 0 && saldoComprobanteActual <= 0;
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.scrollContent}>
+    <KeyboardAvoidingView
+      style={styles.keyboardContainer}
+      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      keyboardVerticalOffset={Platform.OS === 'ios' ? 80 : 0}
+    >
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
 
       {pantalla === 'clientes' && (
         <>
@@ -1474,13 +1483,15 @@ export default function App() {
         </>
       )}
 
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { padding: 20, paddingBottom: 140, backgroundColor: '#eef1f5' },
-  scrollContent: { paddingBottom: 180 },
+  keyboardContainer: { flex: 1, backgroundColor: '#eef1f5' },
+  container: { flex: 1, padding: 20, backgroundColor: '#eef1f5' },
+  scrollContent: { paddingBottom: 260 },
   title: { fontSize: 26, fontWeight: 'bold', marginBottom: 15 },
   subTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 8 },
   input: { backgroundColor: '#fff', padding: 14, marginVertical: 7, borderRadius: 10, fontSize: 16 },
