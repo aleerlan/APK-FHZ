@@ -5,6 +5,7 @@ import {
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
+import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function App() {
@@ -18,6 +19,10 @@ export default function App() {
   const [comprobanteActual, setComprobanteActual] = useState(null);
 
   const [nuevoCliente, setNuevoCliente] = useState('');
+  const [busquedaCliente, setBusquedaCliente] = useState('');
+  const [editarClienteNombre, setEditarClienteNombre] = useState('');
+  const [pagoEditandoRecibo, setPagoEditandoRecibo] = useState(null);
+  const [modoCreditoEdicion, setModoCreditoEdicion] = useState(false);
   const [contadorRecibo, setContadorRecibo] = useState(112);
   const [numeroReciboActual, setNumeroReciboActual] = useState('');
 
@@ -560,6 +565,167 @@ export default function App() {
 
     setClientes([...clientes, nuevo]);
     setNuevoCliente('');
+    setBusquedaCliente('');
+  };
+
+
+  const recalcularPagosCredito = (cr, pagos) => {
+    const pagoEsperado = calcularPagoSemanal(cr);
+    let saldoAnterior = 0;
+
+    return (pagos || []).map(p => {
+      const abonado = numero(p.monto);
+      const diferenciaSemana = Math.max(0, pagoEsperado - abonado);
+      const saldoAcumulado = Math.max(0, saldoAnterior + pagoEsperado - abonado);
+
+      const actualizado = {
+        ...p,
+        esperado: String(pagoEsperado),
+        saldoAnterior: String(saldoAnterior),
+        saldoSemana: String(diferenciaSemana),
+        saldoAcumulado: String(saldoAcumulado)
+      };
+
+      saldoAnterior = saldoAcumulado;
+      return actualizado;
+    });
+  };
+
+  const prepararEditarCliente = () => {
+    setEditarClienteNombre(clienteActual?.nombre || '');
+    setPantalla('editarCliente');
+  };
+
+  const guardarEdicionCliente = () => {
+    if (!editarClienteNombre.trim()) {
+      Alert.alert('Falta dato', 'Ingresá el nombre del cliente.');
+      return;
+    }
+
+    const lista = clientes.map(c => {
+      if (c.id === clienteActual.id) {
+        return { ...c, nombre: editarClienteNombre.trim() };
+      }
+      return c;
+    });
+
+    setClientes(lista);
+    actualizarActuales(lista, clienteActual.id, creditoActual?.id);
+    setPantalla('detalleCliente');
+  };
+
+  const prepararEditarCredito = () => {
+    setModoCreditoEdicion(true);
+    setCredito({
+      contrato: creditoActual?.contrato || '',
+      total: String(creditoActual?.total || ''),
+      valor: String(creditoActual?.valor || ''),
+      interesSemanal: String(creditoActual?.interesSemanal || ''),
+      fechaInicio: creditoActual?.fechaInicio || ''
+    });
+    setPantalla('editarCredito');
+  };
+
+  const guardarEdicionCredito = () => {
+    if (!credito.contrato || !credito.total || !credito.valor || !credito.interesSemanal || !credito.fechaInicio) {
+      Alert.alert('Faltan datos', 'Completá contrato, cuotas, valor del crédito, interés semanal y fecha de inicio.');
+      return;
+    }
+
+    const lista = clientes.map(c => {
+      if (c.id === clienteActual.id) {
+        return {
+          ...c,
+          creditos: (c.creditos || []).map(cr => {
+            if (cr.id === creditoActual.id) {
+              const creditoActualizado = {
+                ...cr,
+                contrato: credito.contrato,
+                total: credito.total,
+                valor: credito.valor,
+                interesSemanal: credito.interesSemanal,
+                fechaInicio: credito.fechaInicio
+              };
+
+              return {
+                ...creditoActualizado,
+                pagos: recalcularPagosCredito(creditoActualizado, creditoActualizado.pagos || [])
+              };
+            }
+            return cr;
+          })
+        };
+      }
+      return c;
+    });
+
+    setClientes(lista);
+    actualizarActuales(lista, clienteActual.id, creditoActual.id);
+    setModoCreditoEdicion(false);
+    setCredito({ contrato: '', total: '', valor: '', interesSemanal: '', fechaInicio: '' });
+    setPantalla('detalleCredito');
+  };
+
+  const prepararEditarPago = (pagoGuardado) => {
+    setPagoEditandoRecibo(pagoGuardado.recibo);
+    setPago({
+      monto: String(pagoGuardado.monto || ''),
+      cuota: String(pagoGuardado.cuota || ''),
+      concepto: pagoGuardado.concepto || 'Pago crédito semanal'
+    });
+    setPantalla('editarPago');
+  };
+
+  const guardarEdicionPago = () => {
+    if (!pago.monto) {
+      Alert.alert('Falta el monto', 'Ingresá el monto abonado.');
+      return;
+    }
+
+    let pagoActualizadoParaVer = null;
+
+    const lista = clientes.map(c => {
+      if (c.id === clienteActual.id) {
+        return {
+          ...c,
+          creditos: (c.creditos || []).map(cr => {
+            if (cr.id === creditoActual.id) {
+              const pagosEditados = (cr.pagos || []).map(pGuardado => {
+                if (pGuardado.recibo === pagoEditandoRecibo) {
+                  return {
+                    ...pGuardado,
+                    monto: pago.monto,
+                    cuota: pago.cuota,
+                    concepto: pago.concepto
+                  };
+                }
+                return pGuardado;
+              });
+
+              const pagosRecalculados = recalcularPagosCredito(cr, pagosEditados);
+              pagoActualizadoParaVer = pagosRecalculados.find(p => p.recibo === pagoEditandoRecibo) || null;
+
+              return {
+                ...cr,
+                pagos: pagosRecalculados
+              };
+            }
+            return cr;
+          })
+        };
+      }
+      return c;
+    });
+
+    setClientes(lista);
+    actualizarActuales(lista, clienteActual.id, creditoActual.id);
+    if (pagoActualizadoParaVer) {
+      setPago(pagoActualizadoParaVer);
+      setNumeroReciboActual(pagoActualizadoParaVer.recibo);
+      setComprobanteActual(pagoActualizadoParaVer);
+    }
+    setPagoEditandoRecibo(null);
+    setPantalla('detalleCredito');
   };
 
   const eliminarCliente = (clienteId) => {
@@ -912,6 +1078,46 @@ export default function App() {
     setPantalla('comprobante');
   };
 
+
+  const exportarBackup = async () => {
+    try {
+      const ahora = new Date();
+      const fechaArchivo = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}_${String(ahora.getHours()).padStart(2, '0')}-${String(ahora.getMinutes()).padStart(2, '0')}`;
+      const nombreArchivo = `backup_fhz_${fechaArchivo}.json`;
+      const ruta = FileSystem.documentDirectory + nombreArchivo;
+
+      const backup = {
+        app: 'FHZ Créditos',
+        tipo: 'backup_completo',
+        versionBackup: 1,
+        fechaExportacion: ahora.toLocaleString(),
+        contadorRecibo,
+        clientes
+      };
+
+      await FileSystem.writeAsStringAsync(
+        ruta,
+        JSON.stringify(backup, null, 2),
+        { encoding: FileSystem.EncodingType.UTF8 }
+      );
+
+      const disponible = await Sharing.isAvailableAsync();
+
+      if (!disponible) {
+        Alert.alert('Backup creado', `Se creó el archivo: ${nombreArchivo}`);
+        return;
+      }
+
+      await Sharing.shareAsync(ruta, {
+        mimeType: 'application/json',
+        dialogTitle: 'Guardar backup FHZ Créditos',
+        UTI: 'public.json'
+      });
+    } catch (e) {
+      Alert.alert('Error al exportar backup', e.message);
+    }
+  };
+
   const compartir = async () => {
     try {
       const uri = await captureRef(viewRef.current, {
@@ -923,6 +1129,36 @@ export default function App() {
       Alert.alert('Error', e.message);
     }
   };
+
+
+  const obtenerEstadoCliente = (cliente) => {
+    const creditos = cliente?.creditos || [];
+    const activos = creditos.filter(cr => creditoEstaActivo(cr));
+
+    if (creditos.length === 0) {
+      return { texto: 'Sin créditos', color: '#64748b' };
+    }
+
+    if (activos.length === 0) {
+      return { texto: 'Crédito cancelado', color: '#16a34a' };
+    }
+
+    const { morosidad } = calcularCobranzaClienteSemanal(cliente);
+
+    if (morosidad === 0) {
+      return { texto: 'Al día', color: '#16a34a' };
+    }
+
+    if (morosidad < 50) {
+      return { texto: 'Atrasado leve', color: '#f59e0b' };
+    }
+
+    return { texto: 'Moroso', color: '#dc2626' };
+  };
+
+  const clientesFiltrados = clientes.filter((c) =>
+    String(c.nombre || '').toLowerCase().includes(busquedaCliente.trim().toLowerCase())
+  );
 
   const total = parseInt(creditoActual?.total) || 0;
   const abonadas = parseInt(pago.cuota) || 0;
@@ -946,22 +1182,53 @@ export default function App() {
         <>
           <Text style={styles.title}>FHZ CRÉDITOS</Text>
 
+          <TextInput
+            placeholder="Buscar cliente"
+            placeholderTextColor="#666"
+            style={styles.input}
+            value={busquedaCliente}
+            onChangeText={setBusquedaCliente}
+          />
+
           <TouchableOpacity style={styles.button} onPress={() => setPantalla('cobranzas')}>
             <Text style={styles.btnText}>Cobranzas</Text>
           </TouchableOpacity>
 
-          {clientes.map((c) => (
-            <TouchableOpacity
-              key={c.id}
-              style={styles.item}
-              onPress={() => abrirCliente(c)}
-              onLongPress={() => eliminarCliente(c.id)}
-            >
-              <Text style={styles.itemTitle}>{c.nombre}</Text>
-              <Text>Créditos: {(c.creditos || []).length}</Text>
-              <Text style={styles.hint}>Mantener presionado para eliminar</Text>
-            </TouchableOpacity>
-          ))}
+          <TouchableOpacity style={styles.buttonSec} onPress={exportarBackup}>
+            <Text>Exportar backup</Text>
+          </TouchableOpacity>
+
+          {clientesFiltrados.length === 0 && busquedaCliente.trim() !== '' && (
+            <View style={styles.item}>
+              <Text>No se encontraron clientes con ese nombre.</Text>
+            </View>
+          )}
+
+          {clientesFiltrados.map((c) => {
+            const estado = obtenerEstadoCliente(c);
+
+            return (
+              <TouchableOpacity
+                key={c.id}
+                style={[
+                  styles.item,
+                  styles.clienteEstadoItem,
+                  { borderLeftColor: estado.color }
+                ]}
+                onPress={() => abrirCliente(c)}
+                onLongPress={() => eliminarCliente(c.id)}
+              >
+                <View style={styles.clienteHeaderRow}>
+                  <Text style={styles.itemTitle}>{c.nombre}</Text>
+                  <View style={[styles.estadoBadge, { backgroundColor: estado.color }]}>
+                    <Text style={styles.estadoBadgeText}>{estado.texto}</Text>
+                  </View>
+                </View>
+                <Text>Créditos: {(c.creditos || []).length}</Text>
+                <Text style={styles.hint}>Mantener presionado para eliminar</Text>
+              </TouchableOpacity>
+            );
+          })}
 
           <TextInput
             placeholder="Nombre del cliente"
@@ -980,6 +1247,10 @@ export default function App() {
       {pantalla === 'detalleCliente' && (
         <>
           <Text style={styles.title}>{clienteActual?.nombre}</Text>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={prepararEditarCliente}>
+            <Text>Editar cliente</Text>
+          </TouchableOpacity>
 
           {(clienteActual?.creditos || []).map((cr) => {
             const pagos = cr.pagos || [];
@@ -1037,6 +1308,10 @@ export default function App() {
             </Text>
           </View>
 
+          <TouchableOpacity style={styles.buttonSec} onPress={prepararEditarCredito}>
+            <Text>Editar crédito</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.button} onPress={irANuevoPago}>
             <Text style={styles.btnText}>Nuevo pago</Text>
           </TouchableOpacity>
@@ -1061,12 +1336,158 @@ export default function App() {
               <Text>Saldo acumulado: {dinero(p.saldoAcumulado || 0)}</Text>
               <Text>Cuota: {p.cuota} de {creditoActual?.total}</Text>
               <Text>{p.fecha}</Text>
+              <TouchableOpacity style={styles.miniButton} onPress={() => prepararEditarPago(p)}>
+                <Text style={styles.miniButtonText}>Editar pago</Text>
+              </TouchableOpacity>
               <Text style={styles.hint}>Mantener presionado para eliminar</Text>
             </TouchableOpacity>
           ))}
 
           <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCliente')}>
             <Text>Volver al cliente</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+
+      {pantalla === 'editarCliente' && (
+        <>
+          <Text style={styles.title}>Editar cliente</Text>
+
+          <TextInput
+            placeholder="Nombre del cliente"
+            placeholderTextColor="#666"
+            style={styles.input}
+            value={editarClienteNombre}
+            onChangeText={setEditarClienteNombre}
+          />
+
+          <TouchableOpacity style={styles.button} onPress={guardarEdicionCliente}>
+            <Text style={styles.btnText}>Guardar cambios</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCliente')}>
+            <Text>Cancelar</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'editarCredito' && (
+        <>
+          <Text style={styles.title}>Editar crédito</Text>
+
+          <TextInput
+            placeholder="Contrato"
+            placeholderTextColor="#666"
+            style={styles.input}
+            value={credito.contrato}
+            onChangeText={(v) => setCredito({ ...credito, contrato: v })}
+          />
+
+          <TextInput
+            placeholder="Total cuotas"
+            placeholderTextColor="#666"
+            style={styles.input}
+            keyboardType="numeric"
+            value={credito.total}
+            onChangeText={(v) => setCredito({ ...credito, total: v })}
+          />
+
+          <TextInput
+            placeholder="Valor crédito"
+            placeholderTextColor="#666"
+            style={styles.input}
+            keyboardType="number-pad"
+            value={credito.valor}
+            onChangeText={(v) => setCredito({ ...credito, valor: v })}
+          />
+
+          <TextInput
+            placeholder="Interés semanal (%)"
+            placeholderTextColor="#666"
+            style={styles.input}
+            keyboardType="numeric"
+            value={credito.interesSemanal}
+            onChangeText={(v) => setCredito({ ...credito, interesSemanal: v })}
+          />
+
+          <TextInput
+            placeholder="Fecha inicio crédito (DD/MM/AAAA)"
+            placeholderTextColor="#666"
+            style={styles.input}
+            value={credito.fechaInicio}
+            onChangeText={(v) => setCredito({ ...credito, fechaInicio: v })}
+          />
+
+          <View style={styles.item}>
+            <Text>Pago semanal recalculado: ${calcularPagoSemanal(credito).toLocaleString('es-AR')}</Text>
+            <Text style={styles.hint}>Al guardar, se recalculan los saldos de los pagos ya creados.</Text>
+          </View>
+
+          <TouchableOpacity style={styles.button} onPress={guardarEdicionCredito}>
+            <Text style={styles.btnText}>Guardar cambios</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => {
+            setModoCreditoEdicion(false);
+            setCredito({ contrato: '', total: '', valor: '', interesSemanal: '', fechaInicio: '' });
+            setPantalla('detalleCredito');
+          }}>
+            <Text>Cancelar</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'editarPago' && (
+        <>
+          <Text style={styles.title}>Editar pago</Text>
+
+          <View style={styles.item}>
+            <Text>Cliente: {clienteActual?.nombre}</Text>
+            <Text>Contrato: {creditoActual?.contrato}</Text>
+            <Text>Recibo: {pagoEditandoRecibo}</Text>
+            <Text>Pago semanal calculado: ${calcularPagoSemanal(creditoActual).toLocaleString('es-AR')}</Text>
+          </View>
+
+          <TextInput
+            placeholder="Monto abonado"
+            placeholderTextColor="#666"
+            style={styles.input}
+            keyboardType="number-pad"
+            value={pago.monto}
+            onChangeText={(v) => setPago({ ...pago, monto: v })}
+          />
+
+          <TextInput
+            placeholder="Número de cuota"
+            placeholderTextColor="#666"
+            style={styles.input}
+            keyboardType="numeric"
+            value={pago.cuota}
+            onChangeText={(v) => setPago({ ...pago, cuota: v })}
+          />
+
+          <TouchableOpacity
+            style={styles.input}
+            onPress={() =>
+              setPago({
+                ...pago,
+                concepto:
+                  pago.concepto === 'Pago crédito semanal'
+                    ? 'Pago crédito mensual'
+                    : 'Pago crédito semanal'
+              })
+            }
+          >
+            <Text>{pago.concepto}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.button} onPress={guardarEdicionPago}>
+            <Text style={styles.btnText}>Guardar cambios</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCredito')}>
+            <Text>Cancelar</Text>
           </TouchableOpacity>
         </>
       )}
@@ -1477,6 +1898,10 @@ export default function App() {
             <Text style={styles.btnText}>Compartir / WhatsApp</Text>
           </TouchableOpacity>
 
+          <TouchableOpacity style={styles.buttonSec} onPress={() => prepararEditarPago(comprobanteActual)}>
+            <Text>Editar comprobante</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('detalleCredito')}>
             <Text>Ver comprobantes del crédito</Text>
           </TouchableOpacity>
@@ -1590,5 +2015,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#1e3a8a',
   },
+  miniButton: { backgroundColor: '#e5e7eb', padding: 9, borderRadius: 8, alignItems: 'center', marginTop: 8 },
+  miniButtonText: { color: '#001b44', fontWeight: 'bold' },
   footerLogo: { textAlign: 'center', color: '#001b44', fontWeight: 'bold', fontSize: 20 },
 });
