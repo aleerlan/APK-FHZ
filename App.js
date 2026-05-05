@@ -5,7 +5,6 @@ import {
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export default function App() {
@@ -22,6 +21,7 @@ export default function App() {
   const [busquedaCliente, setBusquedaCliente] = useState('');
   const [editarClienteNombre, setEditarClienteNombre] = useState('');
   const [pagoEditandoRecibo, setPagoEditandoRecibo] = useState(null);
+  const [fechaEditable, setFechaEditable] = useState('');
   const [modoCreditoEdicion, setModoCreditoEdicion] = useState(false);
   const [contadorRecibo, setContadorRecibo] = useState(112);
   const [numeroReciboActual, setNumeroReciboActual] = useState('');
@@ -673,6 +673,7 @@ export default function App() {
       cuota: String(pagoGuardado.cuota || ''),
       concepto: pagoGuardado.concepto || 'Pago crédito semanal'
     });
+    setFechaEditable(pagoGuardado.fecha || '');
     setPantalla('editarPago');
   };
 
@@ -696,7 +697,8 @@ export default function App() {
                     ...pGuardado,
                     monto: pago.monto,
                     cuota: pago.cuota,
-                    concepto: pago.concepto
+                    concepto: pago.concepto,
+                    fecha: fechaEditable
                   };
                 }
                 return pGuardado;
@@ -725,6 +727,7 @@ export default function App() {
       setComprobanteActual(pagoActualizadoParaVer);
     }
     setPagoEditandoRecibo(null);
+    setFechaEditable('');
     setPantalla('detalleCredito');
   };
 
@@ -1078,46 +1081,6 @@ export default function App() {
     setPantalla('comprobante');
   };
 
-
-  const exportarBackup = async () => {
-    try {
-      const ahora = new Date();
-      const fechaArchivo = `${ahora.getFullYear()}-${String(ahora.getMonth() + 1).padStart(2, '0')}-${String(ahora.getDate()).padStart(2, '0')}_${String(ahora.getHours()).padStart(2, '0')}-${String(ahora.getMinutes()).padStart(2, '0')}`;
-      const nombreArchivo = `backup_fhz_${fechaArchivo}.json`;
-      const ruta = FileSystem.documentDirectory + nombreArchivo;
-
-      const backup = {
-        app: 'FHZ Créditos',
-        tipo: 'backup_completo',
-        versionBackup: 1,
-        fechaExportacion: ahora.toLocaleString(),
-        contadorRecibo,
-        clientes
-      };
-
-      await FileSystem.writeAsStringAsync(
-        ruta,
-        JSON.stringify(backup, null, 2),
-        { encoding: FileSystem.EncodingType.UTF8 }
-      );
-
-      const disponible = await Sharing.isAvailableAsync();
-
-      if (!disponible) {
-        Alert.alert('Backup creado', `Se creó el archivo: ${nombreArchivo}`);
-        return;
-      }
-
-      await Sharing.shareAsync(ruta, {
-        mimeType: 'application/json',
-        dialogTitle: 'Guardar backup FHZ Créditos',
-        UTI: 'public.json'
-      });
-    } catch (e) {
-      Alert.alert('Error al exportar backup', e.message);
-    }
-  };
-
   const compartir = async () => {
     try {
       const uri = await captureRef(viewRef.current, {
@@ -1192,10 +1155,6 @@ export default function App() {
 
           <TouchableOpacity style={styles.button} onPress={() => setPantalla('cobranzas')}>
             <Text style={styles.btnText}>Cobranzas</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity style={styles.buttonSec} onPress={exportarBackup}>
-            <Text>Exportar backup</Text>
           </TouchableOpacity>
 
           {clientesFiltrados.length === 0 && busquedaCliente.trim() !== '' && (
@@ -1465,6 +1424,14 @@ export default function App() {
             keyboardType="numeric"
             value={pago.cuota}
             onChangeText={(v) => setPago({ ...pago, cuota: v })}
+          />
+
+          <TextInput
+            placeholder="Fecha y hora de pago"
+            placeholderTextColor="#666"
+            style={styles.input}
+            value={fechaEditable}
+            onChangeText={setFechaEditable}
           />
 
           <TouchableOpacity
