@@ -53,6 +53,7 @@ export default function App() {
     `${fechaActualRecaudacion.getFullYear()}-${String(fechaActualRecaudacion.getMonth() + 1).padStart(2, '0')}`
   );
   const [mostrarSelectorMeses, setMostrarSelectorMeses] = useState(false);
+  const [backupTexto, setBackupTexto] = useState('');
 
   useEffect(() => {
     cargarDatos();
@@ -86,6 +87,75 @@ export default function App() {
       setContadorRecibo(Math.max(contadorGuardado, mayorRecibo + 1));
     } else if (recibo) {
       setContadorRecibo(parseInt(recibo, 10) || 112);
+    }
+  };
+
+  const exportarBackup = async () => {
+    try {
+      const backup = {
+        version: '1.0',
+        fechaBackup: new Date().toISOString(),
+        clientes,
+        contadorRecibo
+      };
+
+      const contenido = JSON.stringify(backup, null, 2);
+      setBackupTexto(contenido);
+      setPantalla('exportarBackup');
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo preparar el backup.');
+    }
+  };
+
+  const irAImportarBackup = () => {
+    setBackupTexto('');
+    setPantalla('importarBackup');
+  };
+
+  const importarBackupDesdeTexto = async () => {
+    try {
+      if (!backupTexto.trim()) {
+        Alert.alert('Falta dato', 'Pegá el contenido del backup JSON.');
+        return;
+      }
+
+      const backup = JSON.parse(backupTexto.trim());
+
+      if (!Array.isArray(backup.clientes)) {
+        Alert.alert('Backup inválido', 'El archivo no contiene clientes válidos.');
+        return;
+      }
+
+      Alert.alert(
+        'Importar backup',
+        'Esto reemplazará los datos actuales de la app. ¿Querés continuar?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Importar',
+            style: 'destructive',
+            onPress: async () => {
+              const clientesImportados = backup.clientes || [];
+              const contadorImportado = parseInt(backup.contadorRecibo, 10) || obtenerMayorNumeroRecibo(clientesImportados) + 1 || 112;
+
+              await AsyncStorage.setItem('clientes', JSON.stringify(clientesImportados));
+              await AsyncStorage.setItem('contadorRecibo', String(contadorImportado));
+
+              setClientes(clientesImportados);
+              setContadorRecibo(contadorImportado);
+              setClienteActual(null);
+              setClienteCobranzaActual(null);
+              setCreditoActual(null);
+              setComprobanteActual(null);
+              setPantalla('clientes');
+
+              Alert.alert('Backup importado', 'Los datos fueron restaurados correctamente.');
+            }
+          }
+        ]
+      );
+    } catch (error) {
+      Alert.alert('Error', 'El texto pegado no es un backup válido.');
     }
   };
 
@@ -361,6 +431,42 @@ export default function App() {
     setPantalla('cobranzasCliente');
   };
 
+  const eliminarSemanaCobranzaCliente = (semanaId) => {
+    if (!clienteCobranzaActual || !semanaId) return;
+
+    Alert.alert(
+      'Eliminar semana',
+      '¿Seguro que querés eliminar esta semana de cobranzas para este cliente?',
+      [
+        { text: 'Cancelar', style: 'cancel' },
+        {
+          text: 'Eliminar',
+          style: 'destructive',
+          onPress: () => {
+            const lista = clientes.map(cliente => {
+              if (cliente.id !== clienteCobranzaActual.id) return cliente;
+
+              return {
+                ...cliente,
+                creditos: (cliente.creditos || []).map(cr => ({
+                  ...cr,
+                  cobranzasSemanal: (cr.cobranzasSemanal || []).filter(registro => registro.semanaId !== semanaId)
+                }))
+              };
+            });
+
+            setClientes(lista);
+            const clienteActualizado = lista.find(c => c.id === clienteCobranzaActual.id) || null;
+            setClienteCobranzaActual(clienteActualizado);
+            if (clienteActual?.id === clienteCobranzaActual.id) {
+              setClienteActual(clienteActualizado);
+            }
+          }
+        }
+      ]
+    );
+  };
+
 
   const obtenerMesesRecaudacion = () => {
     const anioActual = new Date().getFullYear();
@@ -389,21 +495,35 @@ export default function App() {
     const [anioTexto, mesTexto] = String(mesId).split('-');
     const anio = parseInt(anioTexto, 10);
     const mes = parseInt(mesTexto, 10);
-    const ultimoDia = new Date(anio, mes, 0).getDate();
-    const semanas = [];
 
-    for (let inicioDia = 1; inicioDia <= ultimoDia; inicioDia += 7) {
-      const semanaMes = Math.ceil(inicioDia / 7);
-      const finDia = Math.min(inicioDia + 6, ultimoDia);
-      const inicio = new Date(anio, mes - 1, inicioDia);
-      const fin = new Date(anio, mes - 1, finDia);
+    const primerDiaMes = new Date(anio, mes - 1, 1);
+    const primerDiaMesSiguiente = new Date(anio, mes, 1);
+
+    let inicioSemana = obtenerInicioSemanaLunes(primerDiaMes);
+    const semanas = [];
+    let semanaMes = 1;
+
+    while (inicioSemana < primerDiaMesSiguiente) {
+      const finSemana = obtenerFinSemanaDomingo(inicioSemana);
+
+      // Evita duplicar semanas entre meses.
+      // Si una semana contiene el día 1 del mes siguiente,
+      // esa semana pertenece al mes siguiente, no al mes actual.
+      if (primerDiaMesSiguiente >= inicioSemana && primerDiaMesSiguiente <= finSemana) {
+        break;
+      }
 
       semanas.push({
         id: `${anio}-${String(mes).padStart(2, '0')}-${semanaMes}`,
-        label: `Semana ${semanaMes} - ${meses[mes - 1]} ${anio} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
-        inicioISO: inicio.toISOString(),
-        finISO: fin.toISOString()
+        label: `Semana ${semanaMes} - ${meses[mes - 1]} ${anio} (${formatearFechaCorta(inicioSemana)} al ${formatearFechaCorta(finSemana)})`,
+        inicioISO: inicioSemana.toISOString(),
+        finISO: finSemana.toISOString()
       });
+
+      const proximaSemana = new Date(inicioSemana);
+      proximaSemana.setDate(inicioSemana.getDate() + 7);
+      inicioSemana = proximaSemana;
+      semanaMes += 1;
     }
 
     return semanas;
@@ -428,9 +548,11 @@ export default function App() {
 
     const hoy = new Date();
     const mesActual = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+
     if (mesActual === mesId) {
-      const semanaActual = Math.ceil(hoy.getDate() / 7);
-      return semanasMes.find(s => s.id.endsWith(`-${semanaActual}`)) || semanasMes[0];
+      return semanasMes.find(s =>
+        fechaEstaDentroDeRango(hoy, new Date(s.inicioISO), new Date(s.finISO))
+      ) || semanasMes[0];
     }
 
     return semanasMes[0];
@@ -897,31 +1019,35 @@ export default function App() {
     return `${dia}/${mes}/${anio}`;
   };
 
+  const obtenerInicioSemanaLunes = (fechaBase) => {
+    const fecha = new Date(fechaBase);
+    fecha.setHours(0, 0, 0, 0);
+
+    const diaSemana = fecha.getDay(); // domingo = 0, lunes = 1
+    const diferenciaAlLunes = diaSemana === 0 ? -6 : 1 - diaSemana;
+
+    fecha.setDate(fecha.getDate() + diferenciaAlLunes);
+    return fecha;
+  };
+
+  const obtenerFinSemanaDomingo = (inicioSemana) => {
+    const fin = new Date(inicioSemana);
+    fin.setDate(inicioSemana.getDate() + 6);
+    fin.setHours(23, 59, 59, 999);
+    return fin;
+  };
+
+  const fechaEstaDentroDeRango = (fecha, inicio, fin) => {
+    const f = new Date(fecha);
+    return f >= inicio && f <= fin;
+  };
+
   const obtenerSemanasDelAnio = () => {
     const anio = new Date().getFullYear();
     const semanas = [];
 
-    for (let mes = 0; mes < 12; mes++) {
-      const ultimoDia = new Date(anio, mes + 1, 0).getDate();
-      let semanaMes = 1;
-
-      for (let inicioDia = 1; inicioDia <= ultimoDia; inicioDia += 7) {
-        const finDia = Math.min(inicioDia + 6, ultimoDia);
-        const inicio = new Date(anio, mes, inicioDia);
-        const fin = new Date(anio, mes, finDia);
-
-        semanas.push({
-          id: `${anio}-${String(mes + 1).padStart(2, '0')}-${semanaMes}`,
-          label: `Semana ${semanaMes} - ${meses[mes]} ${anio} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
-          anio,
-          mes: mes + 1,
-          semanaMes,
-          inicioISO: inicio.toISOString(),
-          finISO: fin.toISOString()
-        });
-
-        semanaMes += 1;
-      }
+    for (let mes = 1; mes <= 12; mes++) {
+      semanas.push(...obtenerSemanasPorMesId(`${anio}-${String(mes).padStart(2, '0')}`));
     }
 
     return semanas;
@@ -929,23 +1055,12 @@ export default function App() {
 
   const obtenerSemanaActual = () => {
     const hoy = new Date();
-    const dia = hoy.getDate();
-    const semanaMes = Math.ceil(dia / 7);
-    const inicioDia = ((semanaMes - 1) * 7) + 1;
-    const ultimoDia = new Date(hoy.getFullYear(), hoy.getMonth() + 1, 0).getDate();
-    const finDia = Math.min(inicioDia + 6, ultimoDia);
-    const inicio = new Date(hoy.getFullYear(), hoy.getMonth(), inicioDia);
-    const fin = new Date(hoy.getFullYear(), hoy.getMonth(), finDia);
+    const mesId = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+    const semanasMes = obtenerSemanasPorMesId(mesId);
 
-    return {
-      id: `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${semanaMes}`,
-      label: `Semana ${semanaMes} - ${meses[hoy.getMonth()]} ${hoy.getFullYear()} (${formatearFechaCorta(inicio)} al ${formatearFechaCorta(fin)})`,
-      anio: hoy.getFullYear(),
-      mes: hoy.getMonth() + 1,
-      semanaMes,
-      inicioISO: inicio.toISOString(),
-      finISO: fin.toISOString()
-    };
+    return semanasMes.find(semana =>
+      fechaEstaDentroDeRango(hoy, new Date(semana.inicioISO), new Date(semana.finISO))
+    ) || semanasMes[0];
   };
 
   const seleccionarSemanaPagoGenerado = (semana) => {
@@ -1155,6 +1270,14 @@ export default function App() {
 
           <TouchableOpacity style={styles.button} onPress={() => setPantalla('cobranzas')}>
             <Text style={styles.btnText}>Cobranzas</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={exportarBackup}>
+            <Text>Exportar backup</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={irAImportarBackup}>
+            <Text>Importar backup</Text>
           </TouchableOpacity>
 
           {clientesFiltrados.length === 0 && busquedaCliente.trim() !== '' && (
@@ -1459,6 +1582,64 @@ export default function App() {
         </>
       )}
 
+      {pantalla === 'exportarBackup' && (
+        <>
+          <Text style={styles.title}>Exportar backup</Text>
+
+          <View style={styles.item}>
+            <Text style={styles.itemTitle}>Backup generado</Text>
+            <Text>Copiá todo el texto de abajo y guardalo en un archivo .txt o .json.</Text>
+            <Text>También podés enviártelo por WhatsApp, mail o guardarlo en Google Drive.</Text>
+            <Text style={styles.hint}>Importante: no modifiques el texto del backup.</Text>
+          </View>
+
+          <TextInput
+            style={[styles.input, styles.backupInput]}
+            value={backupTexto}
+            multiline
+            editable={false}
+            selectTextOnFocus
+            textAlignVertical="top"
+          />
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('clientes')}>
+            <Text>Volver</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
+      {pantalla === 'importarBackup' && (
+        <>
+          <Text style={styles.title}>Importar backup</Text>
+
+          <View style={styles.item}>
+            <Text style={styles.itemTitle}>Instrucciones</Text>
+            <Text>1. Abrí el archivo .json del backup.</Text>
+            <Text>2. Copiá todo el contenido.</Text>
+            <Text>3. Pegalo en el campo de abajo.</Text>
+            <Text style={styles.hint}>Importante: al importar se reemplazan los datos actuales.</Text>
+          </View>
+
+          <TextInput
+            placeholder="Pegá acá el contenido del backup JSON"
+            placeholderTextColor="#666"
+            style={[styles.input, styles.backupInput]}
+            value={backupTexto}
+            onChangeText={setBackupTexto}
+            multiline
+            textAlignVertical="top"
+          />
+
+          <TouchableOpacity style={styles.button} onPress={importarBackupDesdeTexto}>
+            <Text style={styles.btnText}>Importar backup</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.buttonSec} onPress={() => setPantalla('clientes')}>
+            <Text>Cancelar</Text>
+          </TouchableOpacity>
+        </>
+      )}
+
       {pantalla === 'credito' && (
         <>
           <Text style={styles.title}>Nuevo crédito</Text>
@@ -1707,13 +1888,18 @@ export default function App() {
                 )}
 
                 {semanas.map((semana) => (
-                  <View key={semana.id} style={styles.item}>
+                  <TouchableOpacity
+                    key={semana.id}
+                    style={styles.item}
+                    onLongPress={() => eliminarSemanaCobranzaCliente(semana.id)}
+                  >
                     <Text style={styles.itemTitle}>{semana.label}</Text>
                     <Text>Pago esperado: {dinero(semana.esperado)}</Text>
                     <Text>Pago generado: {dinero(semana.generado)}</Text>
                     <Text>Porcentaje de cobranza: {semana.cobranza.toFixed(1)}%</Text>
                     <Text>Morosidad del cliente: {semana.morosidad.toFixed(1)}%</Text>
-                  </View>
+                    <Text style={styles.hint}>Mantener presionado para eliminar esta semana</Text>
+                  </TouchableOpacity>
                 ))}
               </>
             );
@@ -1887,6 +2073,7 @@ const styles = StyleSheet.create({
   title: { fontSize: 26, fontWeight: 'bold', marginBottom: 15 },
   subTitle: { fontSize: 20, fontWeight: 'bold', marginTop: 20, marginBottom: 8 },
   input: { backgroundColor: '#fff', padding: 14, marginVertical: 7, borderRadius: 10, fontSize: 16 },
+  backupInput: { minHeight: 220 },
   item: { backgroundColor: '#fff', padding: 14, borderRadius: 10, marginVertical: 7 },
   itemTitle: { fontWeight: 'bold', fontSize: 16 },
   hint: { fontSize: 11, color: '#777', marginTop: 5 },
