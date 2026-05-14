@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
-  ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform
+  ScrollView, StyleSheet, Alert, KeyboardAvoidingView, Platform, Share
 } from 'react-native';
 import { captureRef } from 'react-native-view-shot';
 import * as Sharing from 'expo-sharing';
@@ -104,6 +104,22 @@ export default function App() {
       setPantalla('exportarBackup');
     } catch (error) {
       Alert.alert('Error', 'No se pudo preparar el backup.');
+    }
+  };
+
+  const compartirBackupTexto = async () => {
+    try {
+      if (!backupTexto.trim()) {
+        Alert.alert('Sin backup', 'Primero generá el backup.');
+        return;
+      }
+
+      await Share.share({
+        title: 'Backup FHZ',
+        message: backupTexto
+      });
+    } catch (error) {
+      Alert.alert('Error', 'No se pudo abrir el menú para compartir.');
     }
   };
 
@@ -1588,16 +1604,20 @@ export default function App() {
 
           <View style={styles.item}>
             <Text style={styles.itemTitle}>Backup generado</Text>
-            <Text>Copiá todo el texto de abajo y guardalo en un archivo .txt o .json.</Text>
-            <Text>También podés enviártelo por WhatsApp, mail o guardarlo en Google Drive.</Text>
-            <Text style={styles.hint}>Importante: no modifiques el texto del backup.</Text>
+            <Text>Este backup se genera como texto plano para evitar errores con expo-file-system.</Text>
+            <Text>Podés compartirlo por WhatsApp, email, Drive o copiarlo manualmente.</Text>
+            <Text style={styles.hint}>Importante: guardalo completo y no modifiques el contenido.</Text>
           </View>
+
+          <TouchableOpacity style={styles.button} onPress={compartirBackupTexto}>
+            <Text style={styles.btnText}>Compartir backup</Text>
+          </TouchableOpacity>
 
           <TextInput
             style={[styles.input, styles.backupInput]}
             value={backupTexto}
             multiline
-            editable={false}
+            editable={true}
             selectTextOnFocus
             textAlignVertical="top"
           />
